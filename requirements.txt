@@ -1,0 +1,3 @@
+obd
+python-socketio[client]
+python-dotenv
