@@ -1,62 +1,78 @@
 import obd
 import time
-import sys
+import os
 
-# Activamos el log para ver la negociación de protocolos en la consola
-obd.logger.setLevel(obd.logging.DEBUG)
+# Nivel de log mínimo para mantener la terminal limpia
+obd.logger.setLevel(obd.logging.CRITICAL)
 
-def iniciar_escaneo():
-    print("--- Iniciando diagnóstico en Windows ---")
-    
-    # En Windows, puedes dejarlo vacío para que busque automáticamente
-    # o poner el puerto específico: connection = obd.OBD("COM3")
-    connection = obd.OBD() 
+def limpiar_pantalla():
+    os.system('cls' if os.name == 'nt' else 'clear')
 
-    if connection.status() == obd.OBDStatus.NOT_CONNECTED:
-        print("\n❌ No se detectó el adaptador.")
-        print("Asegúrate de que el dispositivo esté vinculado en Windows y el motor encendido.")
-        return None
-    
-    if connection.status() == obd.OBDStatus.ELM_CONNECTED:
-        print("\n⚠️  Adaptador conectado, pero la ECU del vehículo no responde.")
-        print("Verifica que el switch esté en posición ON o el motor encendido.")
-    
-    return connection
+def obtener_diagnostico():
+    # Conexión optimizada (Modo estable para clones v2.1)
+    conn = obd.OBD("COM10", baudrate=38400, fast=False, timeout=30)
 
-def monitorear():
-    conn = iniciar_escaneo()
-    
-    if not conn or not conn.is_connected():
+    if not conn.is_connected():
+        print("❌ Error de conexión. Verifica el adaptador y el encendido.")
         return
 
-    print(f"\n✅ Conexión establecida!")
-    print(f"Protocolo: {conn.protocol_name()}")
-    print("Presiona Ctrl+C para detener la lectura.\n")
-
-    cmd = obd.commands.RPM
+    # Lista de comandos corregida y ampliada
+    sensores = [
+        ("RPM del Motor", obd.commands.RPM),
+        ("Velocidad", obd.commands.SPEED),
+        ("Voltaje del Adaptador", obd.commands.ELM_VOLTAGE),
+        ("Temperatura Refrigerante", obd.commands.COOLANT_TEMP),
+        ("Carga del Motor", obd.commands.ENGINE_LOAD),
+        ("Posición del Acelerador", obd.commands.THROTTLE_POS),
+        ("Presión Manifold (MAP)", obd.commands.INTAKE_PRESSURE), # Nombre corregido
+        ("Flujo de Aire (MAF)", obd.commands.MAF),
+        ("Temperatura Aire Admisión", obd.commands.INTAKE_TEMP),
+        ("Nivel de Combustible", obd.commands.FUEL_LEVEL),
+        ("Presión Rampa Combustible", obd.commands.FUEL_RAIL_PRESSURE_DIRECT),
+        ("Avance del Encendido", obd.commands.TIMING_ADVANCE),
+        ("Estatus de Luz MIL", obd.commands.STATUS),
+    ]
 
     try:
         while True:
-            response = conn.query(cmd)
+            limpiar_pantalla()
+            print(f"--- REPORTE DE SISTEMA OBD-II | Protocolo: {conn.protocol_name()} ---")
+            print(f"Actualizado: {time.strftime('%H:%M:%S')} (Frecuencia: 3s)\n")
+            print(f"{'PARÁMETRO':<35} | {'VALOR':<25}")
+            print("-" * 65)
+
+            for nombre, cmd in sensores:
+                res = conn.query(cmd)
+                
+                if not res.is_null():
+                    if cmd == obd.commands.STATUS:
+                        valor = "⚠️ ENCENDIDA" if res.value.MIL else "✅ APAGADA"
+                        print(f"{nombre:<35} | {valor}")
+                        print(f"{'Códigos de Error (DTC)':<35} | {res.value.DTC_count} encontrados")
+                    else:
+                        print(f"{nombre:<35} | {res.value}")
+                else:
+                    print(f"{nombre:<35} | [No reportado por ECU]")
+
+            # Sección de Códigos de Falla (DTC)
+            print("\n" + "="*30)
+            print("LECTURA DE CÓDIGOS DE ERROR")
+            print("="*30)
+            dtc_res = conn.query(obd.commands.GET_DTC)
             
-            if not response.is_null():
-                # Obtenemos el valor numérico
-                valor_rpm = response.value.magnitude
-                # \r permite que la línea se sobrescriba en la terminal
-                sys.stdout.write(f"\r>> RPM en tiempo real: {valor_rpm:.2f}          ")
-                sys.stdout.flush()
+            if not dtc_res.is_null() and dtc_res.value:
+                for code, desc in dtc_res.value:
+                    print(f"📍 {code}: {desc}")
             else:
-                sys.stdout.write("\r>> Esperando respuesta de la ECU...      ")
-                sys.stdout.flush()
-            
-            # Un delay de 0.1s es ideal para no saturar el bus de datos
-            time.sleep(0.1)
+                print("No se detectaron códigos de falla activos.")
+
+            print("\nPresiona Ctrl+C para finalizar.")
+            time.sleep(3) # Pausa de 3 segundos solicitada
 
     except KeyboardInterrupt:
-        print("\n\nLectura finalizada por el usuario.")
+        print("\n\nCerrando conexión y liberando puerto...")
     finally:
         conn.close()
-        print("Puerto COM liberado.")
 
 if __name__ == "__main__":
-    monitorear()
+    obtener_diagnostico()
